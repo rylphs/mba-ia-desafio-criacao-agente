@@ -37,6 +37,14 @@ def test_pendente_aparece_com_detalhes():
     assert chamada_original(evs, "outro") is None
 
 
+def test_detalhes_vem_do_payload_validado_pela_tool():
+    orig = {"id": "call-1", "name": "reservar_area", "args": {"area": "Salão de Festas", "data": "2030-05-11"}}
+    payload = {"area": "salao-de-festas", "data": "2030-05-11", "taxa": 150.0}
+    evs = [ev_fc("reservas", "adk_request_confirmation", "adk-1",
+                 {"originalFunctionCall": orig, "toolConfirmation": {"hint": "x", "payload": payload}})]
+    assert listar_pendentes(evs)[0]["detalhes"] == payload
+
+
 def test_respondida_sai_da_lista_aprovada_ou_negada():
     for ok in (True, False):
         evs = [ev_fc("reservas", "adk_request_confirmation", "adk-1", {"originalFunctionCall": ORIG, "toolConfirmation": {}}),

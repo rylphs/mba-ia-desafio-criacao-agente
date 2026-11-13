@@ -21,6 +21,11 @@ def _original(fc) -> dict:
     return dict((fc.args or {}).get("originalFunctionCall") or {})
 
 
+def _payload(fc) -> dict:
+    confirmacao = (fc.args or {}).get("toolConfirmation") or {}
+    return dict(confirmacao.get("payload") or {})
+
+
 def listar_pendentes(events: list[Event]) -> list[dict]:
     respondidas = _respostas(events)
     pendentes = []
@@ -31,7 +36,8 @@ def listar_pendentes(events: list[Event]) -> list[dict]:
         pendentes.append({
             "id": fc.id,
             "acao": orig.get("name"),
-            "detalhes": dict(orig.get("args") or {}),
+            # O payload é o que a tool validou (id da área, data); os args são o que o modelo escreveu.
+            "detalhes": _payload(fc) or dict(orig.get("args") or {}),
         })
     return pendentes
 
