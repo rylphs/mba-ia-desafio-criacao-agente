@@ -50,7 +50,18 @@ def chamada_original(events: list[Event], confirmacao_id: str) -> str | None:
 
 
 def tool_respondeu(events: list[Event], chamada_id: str) -> bool:
-    return chamada_id in _respostas(events)
+    """Diz se a chamada original teve resposta definitiva (não "pendente_confirmacao").
+
+    No ADK a tool que pede confirmação já responde "pendente" para a chamada original
+    antes da aprovação; essa resposta não conta como execução.
+    """
+    return any(
+        fr.id == chamada_id
+        and chamada_id not in e.actions.requested_tool_confirmations
+        and (fr.response or {}).get("status") != "pendente_confirmacao"
+        for e in events
+        for fr in e.get_function_responses()
+    )
 
 
 def texto_resposta(events: list[Event]) -> str:

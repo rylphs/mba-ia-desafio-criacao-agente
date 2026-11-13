@@ -57,6 +57,13 @@ def test_tool_respondeu():
     assert tool_respondeu(evs, "call-1") and not tool_respondeu(evs, "call-2")
 
 
+def test_resposta_pendente_nao_conta_como_execucao():
+    pendente = ev_fr("reservas", "reservar_area", "call-1", {"status": "pendente_confirmacao"})
+    assert not tool_respondeu([pendente], "call-1")
+    executada = ev_fr("reservas", "reservar_area", "call-1", {"status": "reservado"})
+    assert tool_respondeu([pendente, executada], "call-1")
+
+
 def test_texto_resposta_ignora_usuario_e_thought():
     evs = [ev_text("user", "oi"), ev_text("reservas", "pensando", thought=True), ev_text("reservas", "Reservado.")]
     assert texto_resposta(evs) == "Reservado."

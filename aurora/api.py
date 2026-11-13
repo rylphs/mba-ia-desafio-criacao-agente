@@ -55,8 +55,8 @@ async def _carregar(request: Request, session_id: str):
 
 
 async def _executar(request: Request, apartamento: str, session_id: str,
-                    content: types.Content) -> list[Event]:
-    eventos = []
+                    content: types.Content, eventos: list[Event] | None = None) -> list[Event]:
+    eventos = [] if eventos is None else eventos
     try:
         async for e in request.app.state.runner.run_async(
                 user_id=apartamento, session_id=session_id, new_message=content):
@@ -102,12 +102,15 @@ async def responder_confirmacao(session_id: str, corpo: Confirmacao, request: Re
         if corpo.id not in {p["id"] for p in confirmacoes.listar_pendentes(session.events)}:
             raise HTTPException(409, "Não existe confirmação pendente com esse id nesta sessão.")
         original = confirmacoes.chamada_original(session.events, corpo.id)
-        eventos = await _executar(
-            request, apartamento, session_id,
-            confirmacoes.mensagem_confirmacao(corpo.id, corpo.confirmado))
-        session = await request.app.state.session_service.get_session(
-            app_name=APP_NAME, user_id=apartamento, session_id=session_id)
-        if corpo.confirmado and not confirmacoes.tool_respondeu(session.events, original):
+        eventos: list[Event] = []
+        try:
+            await _executar(request, apartamento, session_id,
+                            confirmacoes.mensagem_confirmacao(corpo.id, corpo.confirmado), eventos)
+        except HTTPException:
+            # Falha do modelo depois de a ação aprovada já ter rodado não vira erro.
+            if not (corpo.confirmado and confirmacoes.tool_respondeu(eventos, original)):
+                raise
+        if corpo.confirmado and not confirmacoes.tool_respondeu(eventos, original):
             raise HTTPException(500, "A confirmação foi recebida, mas a ação não foi executada.")
         return await _resposta(request, session_id, apartamento, eventos)
 

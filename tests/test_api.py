@@ -1,7 +1,9 @@
 import pytest
 from fastapi.testclient import TestClient
-from google.adk.events import Event
+from google.adk.events import Event, EventActions
+from google.adk.tools.tool_confirmation import ToolConfirmation
 from google.genai import types
+from google.genai.errors import APIError
 
 from aurora.agents import APP_NAME
 from aurora.api import app
@@ -27,6 +29,26 @@ def _evento_pedido():
             id="adk-1", name="adk_request_confirmation",
             args={"originalFunctionCall": ORIG, "toolConfirmation": {}}))]),
     )
+
+
+def _evento_tool(status):
+    return Event(
+        invocation_id="inv-1", author="reservas",
+        content=types.Content(role="model", parts=[types.Part(function_response=types.FunctionResponse(
+            id=ORIG["id"], name=ORIG["name"], response={"status": status}))]),
+    )
+
+
+def _evento_pendente():
+    # Como no ADK 2.14.1: a tool que pede confirmação já responde "pendente" para a chamada original.
+    e = _evento_tool("pendente_confirmacao")
+    e.actions = EventActions(requested_tool_confirmations={ORIG["id"]: ToolConfirmation(hint="x")})
+    return e
+
+
+def _evento_texto(texto):
+    return Event(invocation_id="inv-2", author="reservas",
+                 content=types.Content(role="model", parts=[types.Part(text=texto)]))
 
 
 def _evento_resposta():
@@ -86,7 +108,7 @@ def test_409_id_ja_respondido(cliente, monkeypatch):
 
 def test_pos_checagem_runner_silencioso_da_500(cliente, monkeypatch):
     sid = _sessao(cliente)
-    _injetar(cliente, sid, _evento_pedido())
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
     chamadas = []
 
     async def runner_mudo(**kw):
@@ -102,9 +124,62 @@ def test_pos_checagem_runner_silencioso_da_500(cliente, monkeypatch):
     assert r.json() == {"detail": "A confirmação foi recebida, mas a ação não foi executada."}
 
 
+def test_pos_checagem_tool_ainda_pendente_da_500(cliente, monkeypatch):
+    sid = _sessao(cliente)
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
+
+    async def runner_pendente(**kw):
+        yield _evento_pendente()
+
+    monkeypatch.setattr(cliente.app.state.runner, "run_async", runner_pendente)
+    r = cliente.post(f"/sessoes/{sid}/confirmacoes", json={"id": "adk-1", "confirmado": True})
+    assert r.status_code == 500
+
+
+def test_aprovar_com_tool_executada_da_200(cliente, monkeypatch):
+    sid = _sessao(cliente)
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
+
+    async def runner_ok(**kw):
+        yield _evento_tool("reservado")
+        yield _evento_texto("Reservado.")
+
+    monkeypatch.setattr(cliente.app.state.runner, "run_async", runner_ok)
+    r = cliente.post(f"/sessoes/{sid}/confirmacoes", json={"id": "adk-1", "confirmado": True})
+    assert r.status_code == 200
+    assert r.json()["resposta"] == "Reservado."
+
+
+def test_falha_do_modelo_depois_da_acao_aprovada_da_200(cliente, monkeypatch):
+    sid = _sessao(cliente)
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
+
+    async def runner_falha_depois(**kw):
+        yield _evento_tool("reservado")
+        raise APIError(503, {"error": {"message": "indisponível"}})
+
+    monkeypatch.setattr(cliente.app.state.runner, "run_async", runner_falha_depois)
+    r = cliente.post(f"/sessoes/{sid}/confirmacoes", json={"id": "adk-1", "confirmado": True})
+    assert r.status_code == 200
+    assert set(r.json()) == {"resposta", "confirmacoes_pendentes"}
+
+
+def test_falha_do_modelo_antes_da_acao_aprovada_da_502(cliente, monkeypatch):
+    sid = _sessao(cliente)
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
+
+    async def runner_falha(**kw):
+        raise APIError(503, {"error": {"message": "indisponível"}})
+        yield
+
+    monkeypatch.setattr(cliente.app.state.runner, "run_async", runner_falha)
+    r = cliente.post(f"/sessoes/{sid}/confirmacoes", json={"id": "adk-1", "confirmado": True})
+    assert r.status_code == 502
+
+
 def test_negar_nao_exige_execucao_da_tool(cliente, monkeypatch):
     sid = _sessao(cliente)
-    _injetar(cliente, sid, _evento_pedido())
+    _injetar(cliente, sid, _evento_pendente(), _evento_pedido())
 
     async def runner_mudo(**kw):
         return
@@ -113,7 +188,9 @@ def test_negar_nao_exige_execucao_da_tool(cliente, monkeypatch):
     monkeypatch.setattr(cliente.app.state.runner, "run_async", runner_mudo)
     r = cliente.post(f"/sessoes/{sid}/confirmacoes", json={"id": "adk-1", "confirmado": False})
     assert r.status_code == 200
-    assert r.json()["confirmacoes_pendentes"][0]["id"] == "adk-1"
+    corpo = r.json()
+    assert set(corpo) == {"resposta", "confirmacoes_pendentes"}
+    assert isinstance(corpo["resposta"], str) and isinstance(corpo["confirmacoes_pendentes"], list)
 
 
 def test_mensagem_devolve_resposta(cliente, monkeypatch):
@@ -131,7 +208,6 @@ def test_mensagem_devolve_resposta(cliente, monkeypatch):
 
 
 def test_erro_do_modelo_da_502(cliente, monkeypatch):
-    from google.genai.errors import APIError
     sid = _sessao(cliente)
 
     async def runner_falha(**kw):
