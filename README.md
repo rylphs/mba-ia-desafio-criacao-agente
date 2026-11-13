@@ -37,7 +37,8 @@ aurora (root, sem regulamento nas instruções)
      e entrega ao Runner, que retoma o especialista
 5. reservar_area roda de novo com tool_confirmation preenchida
    e grava via db.inserir_reserva (idempotente pela chamada original)
-6. A API confere que a tool original respondeu; se não, devolve 500
+6. A API confere, só nos eventos desta retomada, que a tool original
+   respondeu com status diferente de "pendente_confirmacao"; se não, 500
 ```
 
 ### Confirmação com sessão persistida (spike)
@@ -67,6 +68,11 @@ if a["taxa"] > 0:
         )
         return {
             "status": "pendente_confirmacao",
+            ...
+        }
+    if confirmacao.confirmed is False:
+        return {"status": "negado", "mensagem": "Reserva não realizada: o morador não confirmou."}
+return db.inserir_reserva(conn, apartamento, a["id"], data_ok, tool_context.function_call_id)
 ```
 
 `autorizar_visitante` (`aurora/tools/visitantes.py`) pede confirmação sempre, sem condição. O morador dizendo "já confirmei" no chat não muda nada, porque só um `FunctionResponse` de confirmação vindo da rota libera a gravação.
@@ -77,12 +83,33 @@ Rota e conferências, em `aurora/api.py`, `responder_confirmacao`:
 if corpo.id not in {p["id"] for p in confirmacoes.listar_pendentes(session.events)}:
     raise HTTPException(409, "Não existe confirmação pendente com esse id nesta sessão.")
 ...
-if corpo.confirmado and not confirmacoes.tool_respondeu(session.events, original):
+eventos: list[Event] = []
+try:
+    await _executar(request, apartamento, session_id,
+                    confirmacoes.mensagem_confirmacao(corpo.id, corpo.confirmado), eventos)
+except HTTPException:
+    # Falha do modelo depois de a ação aprovada já ter rodado não vira erro.
+    if not (corpo.confirmado and confirmacoes.tool_respondeu(eventos, original)):
+        raise
+if corpo.confirmado and not confirmacoes.tool_respondeu(eventos, original):
     raise HTTPException(500, "A confirmação foi recebida, mas a ação não foi executada.")
 ```
 
 - `409` para id inexistente ou já respondido: decidido pela API a partir dos eventos persistidos, antes de chamar o Runner.
-- Pós-checagem: se a aprovação for aceita mas a tool original não produzir resposta, o resultado é `500`, nunca um `200` silencioso.
+- Confirmação pendente sem resposta continua em `confirmacoes_pendentes` até ser respondida pela rota `/confirmacoes`; mensagens novas não a cancelam.
+- Pós-checagem: olha só os eventos produzidos por esta retomada (a lista que `_executar` preencheu). No ADK 2.14.1 a tool que pede confirmação já grava, antes da aprovação, uma resposta `pendente_confirmacao` para a chamada original; essa resposta não conta. Se a aprovação for aceita e, nesta retomada, a chamada original não receber resposta com outro status, o resultado é `500`, nunca um `200` silencioso. `aurora/confirmacoes.py`, `tool_respondeu`:
+
+```python
+return any(
+    fr.id == chamada_id
+    and chamada_id not in e.actions.requested_tool_confirmations
+    and (fr.response or {}).get("status") != "pendente_confirmacao"
+    for e in events
+    for fr in e.get_function_responses()
+)
+```
+
+- Se o modelo falhar (`502`) depois que a ação aprovada já rodou nesta retomada, a rota devolve `200` com o texto obtido até ali e as pendências atuais, porque a gravação aconteceu.
 - `detalhes` vêm do payload que a tool validou (id da área, data normalizada, nome), com fallback nos argumentos da chamada (`aurora/confirmacoes.py`, `listar_pendentes`):
 
 ```python
