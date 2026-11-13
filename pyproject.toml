@@ -1,0 +1,29 @@
+[project]
+name = "aurora"
+version = "0.1.0"
+description = "Assistente do Residencial Aurora (Google ADK)"
+requires-python = ">=3.12"
+dependencies = [
+    "google-adk[db]==2.14.1",
+    "fastapi",
+    "uvicorn",
+    "aiosqlite",
+    "python-dotenv",
+]
+
+[dependency-groups]
+dev = ["pytest", "httpx"]
+
+[project.scripts]
+aurora-api = "aurora.api:main"
+aurora-restaurar = "aurora.restaurar:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["aurora"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
