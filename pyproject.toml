@@ -9,6 +9,7 @@ dependencies = [
     "uvicorn",
     "aiosqlite",
     "python-dotenv",
+    "pyyaml",
 ]
 
 [dependency-groups]

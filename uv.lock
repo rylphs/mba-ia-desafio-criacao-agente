@@ -78,6 +78,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "google-adk", extra = ["db"] },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 
@@ -93,6 +94,7 @@ requires-dist = [
     { name = "fastapi" },
     { name = "google-adk", extras = ["db"], specifier = "==2.14.1" },
     { name = "python-dotenv" },
+    { name = "pyyaml" },
     { name = "uvicorn" },
 ]
 

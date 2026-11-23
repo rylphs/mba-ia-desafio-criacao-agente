@@ -5,7 +5,7 @@ from google.adk.tools.tool_confirmation import ToolConfirmation
 from google.genai import types
 from google.genai.errors import APIError
 
-from aurora.agents import APP_NAME
+from aurora.agentes import APP_NAME
 from aurora.api import app
 
 ORIG = {"id": "call-1", "name": "reservar_area", "args": {"area": "quadra", "data": "2030-04-06"}}

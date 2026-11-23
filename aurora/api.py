@@ -13,7 +13,7 @@ from google.genai.errors import APIError
 from pydantic import BaseModel
 
 from aurora import config, confirmacoes, db
-from aurora.agents import APP_NAME, criar_app
+from aurora.agentes import APP_NAME, criar_app
 
 
 @asynccontextmanager

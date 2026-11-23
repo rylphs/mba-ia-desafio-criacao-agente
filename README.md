@@ -8,7 +8,7 @@ API HTTP de um assistente de condomínio feito com o Google ADK (2.14.1, versão
 
 | Agente | Acionamento | Responsabilidade | Por quê |
 |---|---|---|---|
-| `aurora` (principal) | `root_agent` do `App` (`aurora/agents.py`, `criar_app`) | Acolhe o morador e roteia. Não tem o regulamento nas instruções. | Concentra o roteamento; assuntos fora do escopo são recusados aqui. |
+| `aurora` (principal) | `root_agent` do `App` (`aurora/agentes/__init__.py`, `criar_app`) | Acolhe o morador e roteia. Não tem o regulamento nas instruções. | Concentra o roteamento; assuntos fora do escopo são recusados aqui. |
 | `reservas` | Transferência (`sub_agents` do principal) | Listar áreas, ver disponibilidade, reservar, listar e cancelar as reservas do próprio apartamento. | Quem pede a confirmação precisa ser o agente que a retoma. Com transferência, o Runner devolve a resposta ao especialista. `AgentTool` não serve: descarta a sessão aninhada e não retoma confirmação. |
 | `visitantes` | Transferência (`sub_agents` do principal) | Autorizar visitante (sempre com confirmação) e listar os visitantes do apartamento. | Mesmo motivo de `reservas`. |
 | `regulamento` | `AgentTool` do principal | Escolhe o capítulo pelo sumário, lê só ele com `ler_capitulo` e responde citando o artigo. | O `AgentTool` roda numa sessão efêmera: só a resposta final entra nos eventos da sessão principal, então o texto dos capítulos não fica salvo na conversa. |
@@ -22,6 +22,30 @@ aurora (root, sem regulamento nas instruções)
 │                            reservar_area, listar_minhas_reservas, cancelar_reserva
 └── sub_agent: visitantes ── autorizar_visitante, listar_meus_visitantes
 ```
+
+### Configuração dos agentes
+
+Cada agente é um YAML em `aurora/agentes/configs/` (`aurora.yaml`, `regulamento.yaml`, `reservas.yaml`, `visitantes.yaml`). `load_config(path)` lê o YAML e, recursivamente, os YAMLs citados em `sub_agents` e `agent_tools`, e devolve um `ConfigAgente` (pydantic). `criar_agente(cfg)` monta o `Agent` do ADK a partir dele (`aurora/agentes/fabrica.py`).
+
+```yaml
+name: reservas
+description: "Reservas de áreas comuns: ..."
+instruction: |
+  Você cuida das reservas ... apartamento {apartamento} desta sessão ...
+tools: [listar_areas, verificar_disponibilidade, reservar_area, ...]
+disallow_transfer_to_peers: true
+```
+
+| Campo | Obrigatório | Descrição |
+|---|---|---|
+| `name`, `description`, `instruction` | sim | repassados ao `Agent` |
+| `model` | não | padrão `GEMINI_MODEL` |
+| `tools` | não | nomes de funções registradas em `TOOLS` (`aurora/agentes/fabrica.py`) |
+| `agent_tools` | não | YAMLs de agentes usados como `AgentTool` (caminho relativo ao YAML) |
+| `sub_agents` | não | YAMLs de agentes para transferência (caminho relativo ao YAML) |
+| `disallow_transfer_to_peers` | não | padrão `false` |
+
+Na instrução, `{chave}` é template de estado do ADK (ex.: `{apartamento}`) e `${nome}` é preenchido na criação do agente por `VARIAVEIS` (`aurora/agentes/fabrica.py`), como `${sumario_regulamento}`. Campo, tool ou variável desconhecidos fazem `load_config` falhar.
 
 ### Fluxo de uma confirmação
 
@@ -138,17 +162,18 @@ Sessões ficam em SQLite via `DatabaseSessionService` (`aurora/api.py`, `lifespa
 
 ### 4. O regulamento é consultado, não carregado
 
-`aurora/agents.py`: a instrução do principal (`_INSTRUCAO_PRINCIPAL`) não contém o regulamento, só manda usar a tool `regulamento`. O agente `regulamento` recebe apenas o sumário (`aurora/regulamento.py`, `sumario`: números e títulos) e lê um capítulo por vez com `ler_capitulo` (`aurora/tools/regulamento.py`), cujo texto vem de `capitulos()`, que divide `dados/regulamento.md` por `## Capítulo`:
+`aurora/agentes/configs/aurora.yaml`: a instrução do principal não contém o regulamento, só manda usar a tool `regulamento`. O agente `regulamento` (`regulamento.yaml`) recebe apenas o sumário via `${sumario_regulamento}` (`aurora/regulamento.py`, `sumario`: números e títulos) e lê um capítulo por vez com `ler_capitulo` (`aurora/tools/regulamento.py`), cujo texto vem de `capitulos()`, que divide `dados/regulamento.md` por `## Capítulo`:
 
-```python
-return Agent(
-    name="regulamento",
-    ...
-    tools=[ler_capitulo],
-)
-...
-tools=[AgentTool(agent=_criar_regulamento())],
+```yaml
+# aurora.yaml
+agent_tools:
+  - regulamento.yaml
+# regulamento.yaml
+tools:
+  - ler_capitulo
 ```
+
+`criar_agente` transforma cada item de `agent_tools` em `AgentTool(agent=criar_agente(...))`.
 
 Como o agente é um `AgentTool`, a sessão dele é aninhada e descartada: os eventos da sessão do morador guardam a chamada da tool e a resposta final, não os capítulos lidos. Isso é estrutura do ADK, não comportamento do modelo.
 
@@ -194,7 +219,7 @@ Variáveis do `.env`:
 | `GOOGLE_API_KEY` | sim | chave do AI Studio |
 | `GEMINI_MODEL` | não | modelo; padrão `gemini-3.5-flash` |
 
-Chamadas ao modelo têm retentativa automática em 429/500/503/504 (`HttpRetryOptions` em `aurora/agents.py`).
+Chamadas ao modelo têm retentativa automática em 429/500/503/504 (`HttpRetryOptions` em `aurora/agentes/fabrica.py`).
 
 Restaurar os dados iniciais:
 
